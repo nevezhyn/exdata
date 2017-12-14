@@ -2,13 +2,21 @@ import json
 import aiohttp
 from urllib.parse import urlunparse
 
-from asyncio import get_event_loop
+from asyncio import get_event_loop, sleep
 
 from aiohttp import web
 
+DDOS_DELAY = 1.0
+
+GLOBAL = 0
+
 
 async def fetch(session, url):
-    async with session.get(url) as response:
+    global GLOBAL
+    headers = {'content-type': 'application/json'}
+    GLOBAL += 1
+    print('in fetch', GLOBAL)
+    async with session.get(url, headers=headers) as response:
         return await response.text()
 
 
@@ -31,7 +39,7 @@ class AbstractDataAdapter():
 class BitfinexDataAdapet(AbstractDataAdapter):
     'https://api.bitfinex.com/v1/symbols_details'
 
-    network_location = 'bitfinex.com'
+    network_location = 'api.bitfinex.com'
     scheme = 'https'
     public_path_v1 = '/v1'
     public_path_v2 = '/v2'
@@ -39,33 +47,54 @@ class BitfinexDataAdapet(AbstractDataAdapter):
     def __init__(self):
         pass
 
+    async def _clear_v2_response(self, response):
+        clear_data = {}
+        for item in response:
+            clear_data[item[0]] = {}
+            clear_data[item[0]] = {'bid': item[1],
+                                   'bid_size': item[2],
+                                   'ask': item[3],
+                                   'ask_size': item[4],
+                                   'daily_change': item[5],
+                                   'daily_change_perc': item[6],
+                                   'last_price': item[7],
+                                   'volume': item[8],
+                                   'high': item[9],
+                                   'low': item[10]}
+        return clear_data
+
     async def _clear_response(self, response):
         clean_data = {}
         for key, value in response.items():
             clean_data[key] = float(value)
         return clean_data
 
-    async def _fetch_response(self, url=''):
+    async def _fetch_response(self, url='', delay=0.0):
+        if delay:
+            sleep(delay)
         async with aiohttp.ClientSession() as session:
             json_response = await fetch(session, url)
         response = json.loads(json_response)
         return response
 
     async def ticker(self, currency='ALL'):
-        symbols = self.products().keys()
+        symbols = await self.products()
+        symbols = list(symbols.keys())
+        symbols = ['t' + symbol.upper() for symbol in symbols]
+        symbols = ','.join(symbols)
 
         scheme = BitfinexDataAdapet.scheme
         netloc = BitfinexDataAdapet.network_location
-        path = BitfinexDataAdapet.public_path_v1 + 'pubticker/{product}'
-        query, params, fragment = '', '', ''
-        ticker_data = {}
-        for symbol in symbols:
-            path.format(product=symbol)
-            url = urlunparse((scheme, netloc, path, params, query, fragment))
-            response = await self._fetch_response(url=url)
-            clean_data = await self._clear_response(response)
-            ticker_data[symbol] = clean_data
-        return ticker_data
+        path = BitfinexDataAdapet.public_path_v2 + '/tickers'
+        query = 'symbols=' + symbols
+        params, fragment = '', ''
+
+        url = urlunparse((scheme, netloc, path, params, query, fragment))
+
+        response = await self._fetch_response(url=url)
+        clean_data = await self._clear_v2_response(response)
+
+        return clean_data
 
     async def products(self):
         scheme = BitfinexDataAdapet.scheme
@@ -87,11 +116,33 @@ class BitfinexDataAdapet(AbstractDataAdapter):
             for item in response
         }
 
+        # products = [
+        #     "btcusd", "ltcusd", "ltcbtc", "ethusd", "ethbtc", "etcbtc",
+        #     "etcusd",
+        #     "rrtusd", "rrtbtc", "zecusd", "zecbtc", "xmrusd", "xmrbtc",
+        #     "dshusd",
+        #     "dshbtc", "bccbtc", "bcubtc", "bccusd", "bcuusd", "btceur",
+        #     "xrpusd",
+        #     "xrpbtc", "iotusd", "iotbtc", "ioteth", "eosusd", "eosbtc",
+        #     "eoseth",
+        #     "sanusd", "sanbtc", "saneth", "omgusd", "omgbtc", "omgeth",
+        #     "bchusd",
+        #     "bchbtc", "bcheth", "neousd", "neobtc", "neoeth", "etpusd",
+        #     "etpbtc",
+        #     "etpeth", "qtmusd", "qtmbtc", "qtmeth", "bt1usd", "bt2usd",
+        #     "bt1btc",
+        #     "bt2btc", "avtusd", "avtbtc", "avteth", "edousd", "edobtc",
+        #     "edoeth",
+        #     "btgusd", "btgbtc", "datusd", "datbtc", "dateth", "qshusd",
+        #     "qshbtc",
+        #     "qsheth", "yywusd", "yywbtc", "yyweth"]
+
+        # return {product: {} for product in products}
         return products
 
 
 class PoloniexDataAdapter(AbstractDataAdapter):
-    network_location = 'polinex.com'
+    network_location = 'poloniex.com'
     scheme = 'https'
     public_path = '/public'
 
@@ -223,6 +274,6 @@ class BithumbDataAdaper(AbstractDataAdapter):
 
 if __name__ == '__main__':
     loop = get_event_loop()
-    adapter = BithumbDataAdaper()
+    adapter = BitfinexDataAdapet()
     result = loop.run_until_complete(adapter.ticker())
     print(result)
