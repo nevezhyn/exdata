@@ -1,23 +1,34 @@
-import json
 import aiohttp
+import datetime
+import ujson
+
 from urllib.parse import urlunparse
+from uuid import uuid4
 
-from asyncio import get_event_loop, sleep
-
+from asyncio import get_event_loop, sleep, wait
 from aiohttp import web
 
 DDOS_DELAY = 1.0
 
 GLOBAL = 0
 
+DEBUG = True
+
 
 async def fetch(session, url):
-    global GLOBAL
-    headers = {'content-type': 'application/json'}
-    GLOBAL += 1
-    print('in fetch', GLOBAL)
-    async with session.get(url, headers=headers) as response:
-        return await response.text()
+    global DEBUG
+    uid = str(uuid4())[-5:] if DEBUG else None
+    start = datetime.datetime.now() if DEBUG else None
+    if uid:
+        print('Fetching: {}'.format(uid))
+    async with session.get(url) as response:
+        response_text = await response.text()
+    if uid:
+        finish = datetime.datetime.now() - start
+        took = finish.total_seconds()
+        print('Done fetching: {}.\nTook: {} s'.format(uid, took))
+
+    return response_text
 
 
 class AbstractDataAdapter():
@@ -49,18 +60,39 @@ class BitfinexDataAdapet(AbstractDataAdapter):
 
     async def _clear_v2_response(self, response):
         clear_data = {}
-        for item in response:
-            clear_data[item[0]] = {}
-            clear_data[item[0]] = {'bid': item[1],
-                                   'bid_size': item[2],
-                                   'ask': item[3],
-                                   'ask_size': item[4],
-                                   'daily_change': item[5],
-                                   'daily_change_perc': item[6],
-                                   'last_price': item[7],
-                                   'volume': item[8],
-                                   'high': item[9],
-                                   'low': item[10]}
+        for product in response:
+            product_ticker = product[0]
+            clear_data[product_ticker] = {}
+            if product_ticker.startswith('t'):
+                clear_data[product_ticker] = {
+                    'bid': product[1],
+                    'bid_size': product[2],
+                    'ask': product[3],
+                    'ask_size': product[4],
+                    'daily_change': product[5],
+                    'daily_change_perc': product[6],
+                    'last_price': product[7],
+                    'volume': product[8],
+                    'high': product[9],
+                    'low': product[10]
+                }
+
+            elif product_ticker.startswith('f'):
+                clear_data[product_ticker] = {
+                    'frr': product[1],
+                    'bid': product[2],
+                    'id_size': product[3],
+                    'bid_period': product[4],
+                    'ask': product[5],
+                    'ask_size': product[6],
+                    'ask_period': product[7],
+                    'daily_change': product[8],
+                    'daily_change_perc': product[9],
+                    'last_price': product[10],
+                    'volume': product[11],
+                    'high': product[11],
+                    'low': product[12]
+                }
         return clear_data
 
     async def _clear_response(self, response):
@@ -71,18 +103,23 @@ class BitfinexDataAdapet(AbstractDataAdapter):
 
     async def _fetch_response(self, url='', delay=0.0):
         if delay:
-            sleep(delay)
-        async with aiohttp.ClientSession() as session:
+            await sleep(delay)
+        async with aiohttp.ClientSession(json_serialize=ujson.dumps) as session:
             json_response = await fetch(session, url)
-        response = json.loads(json_response)
-        return response
+            response = ujson.loads(json_response)
+            return response
 
     async def ticker(self, currency='ALL'):
         symbols = await self.products()
         symbols = list(symbols.keys())
         symbols = ['t' + symbol.upper() for symbol in symbols]
-        symbols = ','.join(symbols)
 
+        # FUNDING STATS ???
+        symbols.append('fUSD')
+        symbols.append('fBTC')
+        symbols.append('fETH')
+
+        symbols = ','.join(symbols)
         scheme = BitfinexDataAdapet.scheme
         netloc = BitfinexDataAdapet.network_location
         path = BitfinexDataAdapet.public_path_v2 + '/tickers'
@@ -93,6 +130,28 @@ class BitfinexDataAdapet(AbstractDataAdapter):
 
         response = await self._fetch_response(url=url)
         clean_data = await self._clear_v2_response(response)
+
+        # This code works mostly as sequential (but had to work in parallel
+        # if exchanges was not shit :)
+        ###################################################################
+        # scheme = BitfinexDataAdapet.scheme
+        # netloc = BitfinexDataAdapet.network_location
+        # path = BitfinexDataAdapet.public_path_v2 + '/tickers'
+        # params, fragment = '', ''
+        # fetch_task = []
+        #
+        # delay = 30.0
+        # space = numpy.linspace(0.0, delay, num=len(symbols))
+        #
+        # for symbol, delay in zip(symbols, space):
+        #     query = 'symbols=' + symbol
+        #     url = urlunparse((scheme, netloc, path, params, query, fragment))
+        #     fetch_task.append(self._fetch_response(url=url, delay=delay))
+        #
+        # done, pending = await wait(fetch_task)
+        # result = [item.result() for item in done]
+        #
+        # clean_data = await self._clear_v2_response(result)
 
         return clean_data
 
@@ -116,28 +175,6 @@ class BitfinexDataAdapet(AbstractDataAdapter):
             for item in response
         }
 
-        # products = [
-        #     "btcusd", "ltcusd", "ltcbtc", "ethusd", "ethbtc", "etcbtc",
-        #     "etcusd",
-        #     "rrtusd", "rrtbtc", "zecusd", "zecbtc", "xmrusd", "xmrbtc",
-        #     "dshusd",
-        #     "dshbtc", "bccbtc", "bcubtc", "bccusd", "bcuusd", "btceur",
-        #     "xrpusd",
-        #     "xrpbtc", "iotusd", "iotbtc", "ioteth", "eosusd", "eosbtc",
-        #     "eoseth",
-        #     "sanusd", "sanbtc", "saneth", "omgusd", "omgbtc", "omgeth",
-        #     "bchusd",
-        #     "bchbtc", "bcheth", "neousd", "neobtc", "neoeth", "etpusd",
-        #     "etpbtc",
-        #     "etpeth", "qtmusd", "qtmbtc", "qtmeth", "bt1usd", "bt2usd",
-        #     "bt1btc",
-        #     "bt2btc", "avtusd", "avtbtc", "avteth", "edousd", "edobtc",
-        #     "edoeth",
-        #     "btgusd", "btgbtc", "datusd", "datbtc", "dateth", "qshusd",
-        #     "qshbtc",
-        #     "qsheth", "yywusd", "yywbtc", "yyweth"]
-
-        # return {product: {} for product in products}
         return products
 
 
@@ -162,7 +199,7 @@ class PoloniexDataAdapter(AbstractDataAdapter):
     async def _fetch_response(self, url=''):
         async with aiohttp.ClientSession() as session:
             json_response = await fetch(session, url)
-        response = json.loads(json_response)
+        response = ujson.loads(json_response)
         return response
 
     async def ticker(self):
@@ -199,8 +236,11 @@ class BithumbDataAdaper(AbstractDataAdapter):
     orderbook_path = '/public/orderbook/{currency}'
     transactions_path = '/public/recent_transactions/{currency}'
 
-    def __init__(self):
-        pass
+    # def __init__(self, session=None):
+    #     if session:
+    #         self._session = session
+    #     else:
+    #         self._session = aiohttp.ClientSession()
 
     async def _clear_response(self, response):
         clean_data = {}
@@ -217,7 +257,7 @@ class BithumbDataAdaper(AbstractDataAdapter):
     async def _fetch_response(self, url=''):
         async with aiohttp.ClientSession() as session:
             json_response = await fetch(session, url)
-        response = json.loads(json_response)
+        response = ujson.loads(json_response)
         if response['status'] != '0000':
             # TODO: Logging module
             raise RuntimeError('Wrong response from exchange!')
@@ -275,5 +315,6 @@ class BithumbDataAdaper(AbstractDataAdapter):
 if __name__ == '__main__':
     loop = get_event_loop()
     adapter = BitfinexDataAdapet()
+    # client_session = aiohttp.ClientSession()
     result = loop.run_until_complete(adapter.ticker())
     print(result)
