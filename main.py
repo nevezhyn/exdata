@@ -1,6 +1,7 @@
 import os
-import sys
 import json
+import logging
+logger = logging.getLogger()
 
 import aiohttp
 
@@ -24,6 +25,8 @@ async def korea():
         clean_data[index] = {}
         if index != 'date':
             for metric, metric_value in values.items():
+                logger.debug(f'Metric: {metric}')
+                logger.debug(f'Metric Value: {metric_value}')
                 v = float(metric_value)
                 clean_data[index][metric] = v
         else:
